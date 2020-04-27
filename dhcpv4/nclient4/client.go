@@ -214,7 +214,7 @@ func new(iface string, conn net.PacketConn, ifaceHWAddr net.HardwareAddr, opts .
 		if iface == `` {
 			return nil, ErrNoConn
 		}
-		c.conn, err = NewRawUDPConn(iface, ClientPort) // broadcast
+		c.conn, err = nclient4.NewRawUDPConn(iface, ClientPort) // broadcast
 		if err != nil {
 			return nil, fmt.Errorf("unable to open a broadcasting socket: %w", err)
 		}
