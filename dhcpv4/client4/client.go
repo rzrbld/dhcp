@@ -251,6 +251,82 @@ func (c *Client) Exchange(ifname string, modifiers ...dhcpv4.Modifier) ([]*dhcpv
 
 	return conversation, nil
 }
+// Exchange runs a full DORA transaction: Discover, Offer, Request, Acknowledge,
+// over UDP. Does not retry in case of failures. Returns a list of DHCPv4
+// structures representing the exchange. It can contain up to four elements,
+// ordered as Discovery, Offer, Request and Acknowledge. In case of errors, an
+// error is returned, and the list of DHCPv4 objects will be shorted than 4,
+// containing all the sent and received DHCPv4 messages.
+func (c *Client) TestLease(ifname string, modifiers ...dhcpv4.Modifier) ([]*dhcpv4.DHCPv4, error) {
+	conversation := make([]*dhcpv4.DHCPv4, 0)
+	raddr, err := c.getRemoteUDPAddr()
+	if err != nil {
+		return nil, err
+	}
+	laddr, err := c.getLocalUDPAddr()
+	if err != nil {
+		return nil, err
+	}
+	// Get our file descriptor for the raw socket we need.
+	var sfd int
+	// If the address is not net.IPV4bcast, use a unicast socket. This should
+	// cover the majority of use cases, but we're essentially ignoring the fact
+	// that the IP could be the broadcast address of a specific subnet.
+	if raddr.IP.Equal(net.IPv4bcast) {
+		sfd, err = MakeBroadcastSocket(ifname)
+	} else {
+		sfd, err = makeRawSocket(ifname)
+	}
+	if err != nil {
+		return conversation, err
+	}
+	rfd, err := makeListeningSocketWithCustomPort(ifname, laddr.Port)
+	if err != nil {
+		return conversation, err
+	}
+
+	defer func() {
+		// close the sockets
+		if err := unix.Close(sfd); err != nil {
+			log.Printf("unix.Close(sendFd) failed: %v", err)
+		}
+		if sfd != rfd {
+			if err := unix.Close(rfd); err != nil {
+				log.Printf("unix.Close(recvFd) failed: %v", err)
+			}
+		}
+	}()
+
+	// Discover
+	discover, err := dhcpv4.NewDiscoveryForInterface(ifname, modifiers...)
+	if err != nil {
+		return conversation, err
+	}
+	conversation = append(conversation, discover)
+
+	// Offer
+	offer, err := c.SendReceive(sfd, rfd, discover, dhcpv4.MessageTypeOffer)
+	if err != nil {
+		return conversation, err
+	}
+	conversation = append(conversation, offer)
+
+	// // Request
+	// request, err := dhcpv4.NewRequestFromOffer(offer, modifiers...)
+	// if err != nil {
+	// 	return conversation, err
+	// }
+	// conversation = append(conversation, request)
+	//
+	// // Ack
+	// ack, err := c.SendReceive(sfd, rfd, request, dhcpv4.MessageTypeAck)
+	// if err != nil {
+	// 	return conversation, err
+	// }
+	// conversation = append(conversation, ack)
+
+	return conversation, nil
+}
 
 // SendReceive sends a packet (with some write timeout) and waits for a
 // response up to some read timeout value. If the message type is not
